@@ -6,4 +6,5 @@
     :module: pt
 :pt:
   :rsskey: dupa
+:database: /tmp/database
 :watchdir: /tmp/zuo

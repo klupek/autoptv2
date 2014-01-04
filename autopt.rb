@@ -36,10 +36,31 @@ def to_bytes(str)
 	end
 		
 end
+
+
+class ConfigFile
+	def initialize(fn)
+		@fn = fn
+		@data = YAML.load(File.open(fn))
+	end
+
+	def method_missing(m, *args, &block)
+		@data[m]
+	end
+
+	def save
+		newfn = @fn + ".new"
+		File.write(newfn, @data.to_yaml)
+		File.rename(newfn, @fn)
+	end
+end
+
+config = ConfigFile.new('config.yaml')
+
 Thread::abort_on_exception=true
 ActiveSupport::Deprecation.silenced = true
 ActiveRecord::Base.logger = nil
-ActiveRecord::Base.configurations = { 'pt' => { 'adapter' => 'sqlite3', 'database' => '/tmp/test.db', 'pool' => 5, 'timeout' => 5000 }}
+ActiveRecord::Base.configurations = { 'pt' => { 'adapter' => 'sqlite3', 'database' => config.database, 'pool' => 5, 'timeout' => 5000 }}
 #ActiveRecord::Base.configurations = { 'pt' => { 'adapter' => 'mysql', 'username' => 'klupek', 'database' => 'klupek_pt', 'password' => 'Aen6kiChoseeHiex', 'pool' => 5, 'timeout' => 5000 }}
 ActiveRecord::Base.establish_connection('pt')
 
@@ -136,22 +157,6 @@ end
 
 exit if ARGV[0] == 'generate-sql-tables-only'
 
-class ConfigFile
-	def initialize(fn)
-		@fn = fn
-		@data = YAML.load(File.open(fn))
-	end
-
-	def method_missing(m, *args, &block)
-		@data[m]
-	end
-
-	def save
-		newfn = @fn + ".new"
-		File.write(newfn, @data.to_yaml)
-		File.rename(newfn, @fn)
-	end
-end
 
 class LogWatcher
 	def initialize(config,modules)
@@ -468,7 +473,6 @@ class Downloader
 	end
 end
 
-config = ConfigFile.new('config.yaml')
 downloader = Downloader.new(config)
 
 lw = LogWatcher.new(config, { 
