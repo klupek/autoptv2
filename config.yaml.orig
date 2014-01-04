@@ -2,10 +2,8 @@
 :sources:
   logs/pt.log:
     :module: pt
-    :offset: 9234136
   logs/pt-announce.log:
     :module: pt
-    :offset: 7233783
 :pt:
   :rsskey: dupa
 :watchdir: /tmp/zuo
