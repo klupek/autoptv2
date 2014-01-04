@@ -324,9 +324,11 @@ class TVADL
 
 	def reload
 		puts "Reloading TVADL"
-		@accepter = Regexp.new('^((' + AdlEntry.find(:all, :conditions => [ 'type = ?', 'tv' ]).map { |entry|
+		entries = AdlEntry.find(:all, :conditions => [ 'type = ?', 'tv' ])
+		@accepter = Regexp.new('^((' + entries.map { |entry|
 			entry.data + "[._](S\\d+E\\d+(-?E\\d+)?|\\d+x\\d\\d)[._]"
 		}.join(')|(') + '))')
+		@empty = entries.empty?		
 	end
 	
 	def tv_sig(relname)
@@ -381,7 +383,7 @@ class TVADL
 
 
 	def consume(object)
-		if object[:name].match(@accepter)
+		if !@empty and object[:name].match(@accepter)
 			dh = DownloadHistory.find(:first, :conditions => [ 'name = ?', object[:name]])
 			if dh
 				# skip
@@ -406,12 +408,14 @@ class GenericADL
 	end
 	def reload
 		puts "Reloading GenericADL"
-		@accepter = Regexp.new('^((' + AdlEntry.find(:all, :conditions => [ 'type = ?', 'generic' ]).map { |entry|
+		entries = AdlEntry.find(:all, :conditions => [ 'type = ?', 'generic' ])
+		@accepter = Regexp.new('^((' + entries.map { |entry|
 			entry.data
 		}.join(')|(') + '))$')
+		@empty = entries.empty?
 	end
 	def consume(object)
-		if object[:name].match(@accepter)
+		if !@empty and object[:name].match(@accepter)
 			puts "GenericADL wants: #{object[:name]}"
 			@downloader.download(object)
 		end
