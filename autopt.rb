@@ -176,6 +176,7 @@ class LogWatcher
 			@threads << Thread.new(f) { |fh|
 				puts "Reading backlog for " + fh[:filename]
 				lines = 0
+				ActiveRecord::Base.connection.execute('begin transaction')
 				begin
 					loop do 
 						line = fh[:file].readline
@@ -184,6 +185,7 @@ class LogWatcher
 					end
 					rescue EOFError
 				end	
+				ActiveRecord::Base.connection.execute('commit')
 				puts "Read #{lines} lines of backlog in " + fh[:filename]
 				fh[:file].extend(File::Tail)
 				fh[:file].interval = 10
