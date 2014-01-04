@@ -60,9 +60,8 @@ config = ConfigFile.new('config.yaml')
 Thread::abort_on_exception=true
 ActiveSupport::Deprecation.silenced = true
 ActiveRecord::Base.logger = nil
-ActiveRecord::Base.configurations = { 'pt' => { 'adapter' => 'sqlite3', 'database' => config.database, 'pool' => 5, 'timeout' => 5000 }}
-#ActiveRecord::Base.configurations = { 'pt' => { 'adapter' => 'mysql', 'username' => 'klupek', 'database' => 'klupek_pt', 'password' => 'Aen6kiChoseeHiex', 'pool' => 5, 'timeout' => 5000 }}
-ActiveRecord::Base.establish_connection('pt')
+ActiveRecord::Base.configurations = { 'default' => config.database }
+ActiveRecord::Base.establish_connection('default')
 
 class Release < ActiveRecord::Base
 	def self.create_table

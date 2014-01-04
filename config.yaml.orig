@@ -6,5 +6,9 @@
     :module: pt
 :pt:
   :rsskey: dupa
-:database: /tmp/database
+:database:
+  adapter: sqlite3
+  database: /tmp/database
+  pool: 5
+  timeout: 5000 
 :watchdir: /tmp/zuo
