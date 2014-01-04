@@ -6,7 +6,6 @@ require 'active_record'
 require 'file-tail'
 require 'thread'
 require 'yaml'
-require 'bsearch'
 require 'open-uri'
 
 def irctime_to_time(str)
