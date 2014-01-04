@@ -163,7 +163,7 @@ class LogWatcher
 		@modules = modules
 		@files = config.sources.map { |logfile,src|
 			f = File.open(logfile)
-			f.seek(src[:offset] || 0, IO::SEEK_SET)
+#			f.seek(src[:offset] || 0, IO::SEEK_SET)
 			{ :file => f, :module => src[:module], :filename => logfile }
 		}
 		@threads = []
@@ -176,16 +176,16 @@ class LogWatcher
 			@threads << Thread.new(f) { |fh|
 				puts "Reading backlog for " + fh[:filename]
 				lines = 0
-				ActiveRecord::Base.connection.execute('begin transaction')
-				begin
-					loop do 
-						line = fh[:file].readline
-						@queue.push({ :line => line, :module => fh[:module], :filename => fh[:filename], :offset => fh[:file].pos}) unless line == ''
-						lines += 1
-					end
-					rescue EOFError
-				end	
-				ActiveRecord::Base.connection.execute('commit')
+				ActiveRecord::Base.transaction do
+					begin
+						loop do 
+							line = fh[:file].readline
+							@queue.push({ :line => line, :module => fh[:module], :filename => fh[:filename], :offset => fh[:file].pos}) unless line == ''
+							lines += 1
+						end
+						rescue EOFError
+					end	
+				end
 				puts "Read #{lines} lines of backlog in " + fh[:filename]
 				fh[:file].extend(File::Tail)
 				fh[:file].interval = 10
