@@ -291,16 +291,20 @@ class ReleaseDb
 			if yo[:url] != object[:url]
 				MissingRelease.delete_all(k)
 			end
-			r.object = object.to_yaml
-			r.save!
+			if object.to_yaml != r.object
+				r.object = object.to_yaml
+				r.save! 
+			end
 		elsif r = Release.find(:first, :conditions => k)
 			yo = YAML::load(r.object)
 			if yo[:url] != object[:url]
 				puts "UPDATE: " + object[:name]
 				MissingRelease.delete_all(k)
 			end
-			r.object = object.to_yaml
-			r.save!
+			if object.to_yaml != r.object
+				r.object = object.to_yaml
+				r.save!
+			end
 			@receivers.each do |r| r.consume(object) end
 		else 
 			if custom_filter(object) or object[:name].match(@filter)
