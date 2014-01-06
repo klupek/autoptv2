@@ -201,9 +201,9 @@ class LogWatcher
 				if task == :die
 					puts "LogWatcher is shutting down"
 					break
-				else
-					@config.sources[task[:filename]][:offset] = task[:offset]
-					@config.save # TODO: do it less frequent
+				else					
+				#	@config.sources[task[:filename]][:offset] = task[:offset]
+				#	@config.save # TODO: do it less frequent
 					@modules[task[:module]].consume(task[:line])
 				end
 			}
