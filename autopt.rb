@@ -156,6 +156,11 @@ end
 	end
 end
 
+ActiveRecord::Base.connection.execute('create unique index if not exists releases_namesource on releases(name,source)')
+ActiveRecord::Base.connection.execute('create index if not exists adl_types on adl_entries(type)')
+ActiveRecord::Base.connection.execute('create index if not exists download_histories_name on download_histories(name)')
+ActiveRecord::Base.connection.execute('create index if not exists mising_releases_name on missing_releases(name)')
+
 exit if ARGV[0] == 'generate-sql-tables-only'
 
 
@@ -289,9 +294,8 @@ class ReleaseDb
 		if r = ArchivedRelease.find(:first, :conditions => k) 
 			yo = YAML::load(r.object)
 			if yo[:url] != object[:url]
+				puts "ARCHIVE-UPDATE: #{object[:name]}"
 				MissingRelease.delete_all(k)
-			end
-			if object.to_yaml != r.object
 				r.object = object.to_yaml
 				r.save! 
 			end
@@ -300,8 +304,6 @@ class ReleaseDb
 			if yo[:url] != object[:url]
 				puts "UPDATE: " + object[:name]
 				MissingRelease.delete_all(k)
-			end
-			if object.to_yaml != r.object
 				r.object = object.to_yaml
 				r.save!
 			end
