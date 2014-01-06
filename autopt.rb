@@ -63,6 +63,8 @@ ActiveRecord::Base.logger = nil
 ActiveRecord::Base.configurations = { 'default' => config.database }
 ActiveRecord::Base.establish_connection('default')
 
+ActiveRecord::Base.connection.execute("PRAGMA cache_size=102400")
+
 class Release < ActiveRecord::Base
 	def self.create_table
 		ActiveRecord::Base.connection.execute('CREATE TABLE releases(id INTEGER PRIMARY KEY AUTOINCREMENT, source varchar(32) not null, name varchar(255) not null, added TIMESTAMP not null, object text not null)')
