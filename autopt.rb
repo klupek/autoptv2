@@ -55,6 +55,14 @@ class ConfigFile
 	end
 end
 
+trap 'INT' do
+  Thread.list.each do |thread|
+    STDERR.puts "Thread-#{thread.object_id.to_s(36)}"
+    STDERR.puts thread.backtrace.join("\n    \\_ ")
+  end
+  exit
+end
+
 config = ConfigFile.new('config.yaml')
 
 Thread::abort_on_exception=true
