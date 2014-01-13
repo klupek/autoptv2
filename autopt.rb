@@ -65,6 +65,10 @@ end
 
 config = ConfigFile.new('config.yaml')
 
+def indb(&block) 
+	block.call
+end
+
 Thread::abort_on_exception=true
 ActiveSupport::Deprecation.silenced = true
 ActiveRecord::Base.logger = nil
@@ -127,7 +131,7 @@ class Filter < ActiveRecord::Base
 
 	def self.generate_super_regex
 		print "Generating uberregex... "
-		result = Regexp.new('^((' + Filter.find(:all).map { |x| x.name_regex }.join(')|(') + '))$')
+		result = indb { Regexp.new('^((' + Filter.find(:all).map { |x| x.name_regex }.join(')|(') + '))$') }
 		puts "ok."
 		result
 	end
@@ -149,11 +153,11 @@ end
 
 class DeferredDownload < ActiveRecord::Base
 	def self.create_table
-		ActiveRecord::Base.connection.execute('CREATE TABLE deferred_downloads(id INTEGER PRIMARY KEY AUTOINCREMENT, object text not null)')
+		ActiveRecord::Base.connection.execute('CREATE TABLE deferred_downloads(id INTEGER PRIMARY KEY AUTOINCREMENT, url text not null, object text not null, log text not null)')
 	end
 
-	def self.from_object(object)
-		DeferredDownload.create(:object => object.to_yaml)
+	def self.from_object(object, log)
+		DeferredDownload.new(:object => object.to_yaml, :url => object[:url], :log => log) 
 	end
 end
 
@@ -171,9 +175,64 @@ ActiveRecord::Base.connection.execute('create index if not exists mising_release
 
 exit if ARGV[0] == 'generate-sql-tables-only'
 
+class DeferredDownloader
+
+	def initialize(downloader)
+		@downloader = downloader
+	end
+
+	def delay(tries)
+		if tries == 0
+			return 5*60
+		elsif tries == 1
+			return 30*60
+		elsif tries == 2
+			return 120*60
+		else
+			return 24*60*60
+		end
+	end 
+	
+	def run
+		puts "DEFERRED: Starting"
+		dds = indb { DeferredDownload.find(:all).map { |x| x } }
+		if dds.empty?	
+			puts "DEFERRED: Nothing to do"	
+		else
+			now = Time.now.to_i
+			checked = 0
+			dds.each do |dd|
+				object = YAML::load(dd.object)
+				object[:tries] ||= 0
+				object[:lasttry] ||= 0 
+				if Time.now.to_i >= object[:lasttry] + delay(object[:tries])
+					puts "DEFERRED-TRY: #{object[:name]}"
+					if @downloader.download(object, false)
+						indb { DeferredDownload.delete_all([ 'id = ?', dd.id]) }
+						puts "DEFERRED-OK: #{object[:name]}"
+					else 
+						if indb { MissingRelease.find(:first, :conditions => [ 'name = ? and source = ?', object[:name], object[:source] ]) }
+							indb { DeferredDownload.delete_all([ 'id = ?', dd.id]) }
+							puts "DEFERRED-404: #{object[:name]}"
+						else
+							puts "DEFERRED-DEFER: #{object[:name]} will be retried in #{delay(object[:tries])} seconds"								
+							object[:tries] += 1
+							object[:lasttry] = Time.now.to_i
+							dd.object = object.to_yaml
+							indb { dd.save! }
+						end
+					end
+					checked += 1
+				end
+			end
+			puts "DEFERRED-REPORT: #{checked} (re)tried downloads, #{dds.count-checked} waiting"
+		end
+	end	
+end	
+
 
 class LogWatcher
-	def initialize(config,modules)
+	def initialize(config,modules, deferred)
 		@config = config
 		@modules = modules
 		@files = config.sources.map { |logfile,src|
@@ -183,6 +242,7 @@ class LogWatcher
 		}
 		@threads = []
 		@consumer_thread = nil
+		@ddownloader = deferred
 		@queue = Queue.new
 	end	
 
@@ -205,21 +265,41 @@ class LogWatcher
 				fh[:file].extend(File::Tail)
 				fh[:file].interval = 10
 				fh[:file].backward(10)
-#				fh[:file].tail { |line|
-#					@queue.push({ :line => line, :module => fh[:module], :filename => fh[:filename], :offset => fh[:file].pos})	
-#				}
+				puts "LIVE: Streaming live data from #{fh[:filename]}"
+				fh[:file].tail { |line|
+					@queue.push({ :line => line, :module => fh[:module], :filename => fh[:filename], :offset => fh[:file].pos})	
+				}
 			}
 		}
 		@consumer_thread = Thread.new { 
+			lasttask = Time.now.to_i
+			lastdd = 0
+			dddelay = 6*60
+			taskwarn = 120
 			loop {
-				task = @queue.pop
-				if task == :die
-					puts "LogWatcher is shutting down"
-					break
-				else					
-				#	@config.sources[task[:filename]][:offset] = task[:offset]
-				#	@config.save # TODO: do it less frequent
-					@modules[task[:module]].consume(task[:line])
+				if Time.now.to_i - lastdd > dddelay
+					lastdd = Time.now.to_i
+					@ddownloader.run
+				end
+				if Time.now.to_i - lasttask > taskwarn
+					puts "No new tasks in #{taskwarn} seconds"
+					lasttask = Time.now.to_i
+				end
+				begin
+					loop {
+						task = @queue.pop(true)
+						lasttask = Time.now.to_i
+						if task == :die
+							puts "LogWatcher is shutting down"
+							break
+						else					
+						#	@config.sources[task[:filename]][:offset] = task[:offset]
+						#	@config.save # TODO: do it less frequent
+							@modules[task[:module]].consume(task[:line])
+						end
+					}
+				rescue ThreadError 
+					sleep 1
 				end
 			}
 		}
@@ -299,31 +379,31 @@ class ReleaseDb
 
 	def consume(object)
 		k = key(object)
-		if r = ArchivedRelease.find(:first, :conditions => k) 
+		if r = indb { ArchivedRelease.find(:first, :conditions => k) }
 			yo = YAML::load(r.object)
 			if yo[:url] != object[:url]
-				puts "ARCHIVE-UPDATE: #{object[:name]}"
-				MissingRelease.delete_all(k)
+				puts "ARCHIVE-UPDATE: #{object[:name]}" 
+				indb { MissingRelease.delete_all(k) }
 				r.object = object.to_yaml
-				r.save! 
+				indb { r.save!  }
 			end
-		elsif r = Release.find(:first, :conditions => k)
+		elsif r = indb { Release.find(:first, :conditions => k) }
 			yo = YAML::load(r.object)
 			if yo[:url] != object[:url]
 				puts "UPDATE: " + object[:name]
-				MissingRelease.delete_all(k)
+				indb { MissingRelease.delete_all(k) }
 				r.object = object.to_yaml
-				r.save!
+				indb { r.save! }
 			end
-			@receivers.each do |r| r.consume(object) end
+			@receivers.each do |r| r.consume(object) end unless indb { MissingRelease.find(:first, :conditions => [ 'name = ? and source = ?', object[:name], object[:source] ]) }
 		else 
 			if custom_filter(object) or object[:name].match(@filter)
 				puts "AUTO-ARCHIVE: " + object[:name]
-				ArchivedRelease.from_object(object).save!
+				indb { ArchivedRelease.from_object(object).save! }
 			else
 				@receivers.each do |r| r.consume(object) end
 				puts 'N: ' + object[:name]
-				Release.from_object(object).save!
+				indb { Release.from_object(object).save! }
 			end
 		end
 	end
@@ -346,7 +426,7 @@ class TVADL
 
 	def reload
 		puts "Reloading TVADL"
-		entries = AdlEntry.find(:all, :conditions => [ 'type = ?', 'tv' ])
+		entries = indb { AdlEntry.find(:all, :conditions => [ 'type = ?', 'tv' ]) }
 		@accepter = Regexp.new('^((' + entries.map { |entry|
 			entry.data + "[._](S\\d+E\\d+(-?E\\d+)?|\\d+x\\d\\d)[._]"
 		}.join(')|(') + '))')
@@ -367,7 +447,7 @@ class TVADL
 	end
 
 	def get_downloaded_quality(sig)
-		e = DownloadHistory.find(:first, :conditions => [ 'name = ?', sig.join('.') ])
+		e = indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', sig.join('.') ]) }
 		if e
 			return e.quality || 'BZIUM'
 		else
@@ -387,7 +467,7 @@ class TVADL
 		return false if sig.nil?
 		tokens = relname.upcase.split(/[._ ]/)
 		ourquality = tv_quality(relname)
-		downloaded_ep = DownloadHistory.find(:first, :conditions => [ 'name = ?', sig.join('.') ])	
+		downloaded_ep = indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', sig.join('.') ]) }
 		if downloaded_ep
 			if tokens.index('PROPER') or tokens.index('REPACK')
 				puts "Reason: PROPER or REPACK"
@@ -406,7 +486,7 @@ class TVADL
 
 	def consume(object)
 		if !@empty and object[:name].match(@accepter)
-			dh = DownloadHistory.find(:first, :conditions => [ 'name = ?', object[:name]])
+			dh = indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', object[:name]]) }
 			if dh
 				# skip
 			elsif downloaded?(object[:name])
@@ -414,10 +494,8 @@ class TVADL
 				DownloadHistory.create!(:name => object[:name], :quality => 'SKIP') 
 			else
 				puts "TVADL wants: #{object[:name]}"
-				if @downloader.download(object)
-					 dh = DownloadHistory.create!(:name => tv_sig(object[:name]).join("."), :quality => @qualityorder[tv_quality(object[:name])])
-					 puts "TVADL saved #{dh.name}/#{dh.quality}"
-				end
+				object[:addhistory] = [ { :name => tv_sig(object[:name]).join('.'), :quality => @qualityorder[tv_quality(object[:name])] } ]
+				@downloader.download(object)
 			end
 		end
 	end
@@ -430,7 +508,7 @@ class GenericADL
 	end
 	def reload
 		puts "Reloading GenericADL"
-		entries = AdlEntry.find(:all, :conditions => [ 'type = ?', 'generic' ])
+		entries = indb { AdlEntry.find(:all, :conditions => [ 'type = ?', 'generic' ]) }
 		@accepter = Regexp.new('^((' + entries.map { |entry|
 			entry.data
 		}.join(')|(') + '))$')
@@ -447,50 +525,83 @@ end
 class Downloader 
 	def initialize(config)
 		@config = config
+#		@mutex = Mutex.new
 	end
-	def download(object)
-		if DownloadHistory.find(:first, :conditions => [ 'name = ?', object[:name] ])
-			puts "SKIP-ALREADY-DOWNLOADED: #{object[:name]}"
-			return true
-		elsif MissingRelease.find(:first, :conditions => [ 'name = ?', object[:name] ])
-			puts "SKIP-404: #{object[:name]}"
-			return false
-		else
-			puts "Download #{object[:name]}"
-			begin
-				# FIXME
-				url = object[:url].gsub(/polishtracker\.net/,'localhost')
-				filename = File.join(@config.watchdir,object[:name]) + '.torrent'
-				filenamed = filename + ".adldownload"
-				puts "DOWNLOAD: #{object[:name]}/#{object[:url]} => #{filenamed}"
-				open(url,'rb') do |srcf|
-					open(filenamed, 'wb') do |dstf|
-						dstf.write(srcf.read)
+	def download(object, defer_on_error = true)
+		result = nil
+#		@mutex.synchronize { 
+			if indb { defer_on_error and DeferredDownload.find(:first, :conditions => [ 'url = ?', object[:url] ]) } # deferdownloader sets defer_on_error=false
+				puts "SKIP-ALREADY-DEFERRED: #{object[:name]}"
+				result = false
+			elsif indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', object[:name] ]) }
+				puts "SKIP-ALREADY-DOWNLOADED: #{object[:name]}"
+				result = true
+			elsif indb { MissingRelease.find(:first, :conditions => [ 'name = ? and source = ?', object[:name], object[:source] ]) }
+				puts "SKIP-404: #{object[:name]}"
+				result = false
+			elsif object[:addhistory] and object[:addhistory].detect { |ahe| indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', ahe[:name] ]) } }
+				add_history_element = object[:addhistory].detect { |ahe| indb { DownloadHistory.find(:first, :conditions => [ 'name = ?', ahe[:name] ]) } }
+				puts "SKIP-BETTER-ALTERNATIVE-ALREADY-DOWNLOADED: #{object[:name]} due to #{add_history_element[:name]}"
+				result = true
+			else
+				puts "Download #{object[:name]}"
+				begin
+					# FIXME
+					url = object[:url].gsub(/polishtracker\.net/,'localhost')
+					filename = File.join(@config.watchdir,object[:name]) + '.torrent'
+					filenamed = filename + ".adldownload"
+					puts "DOWNLOAD: #{object[:name]}/#{object[:url]} => #{filenamed}"
+					open(url,'rb') do |srcf|
+						open(filenamed, 'wb') do |dstf|
+							dstf.write(srcf.read)
+						end
+					end
+					File.rename(filenamed, filename)
+					indb { DownloadHistory.create({ :name => object[:name], :additional => 'single'}) }
+					if object[:addhistory]
+						object[:addhistory].each do |ahe|
+							puts "DOWNLOADER: Saving additional DH: " + ahe.inspect
+							indb { DownloadHistory.create(ahe) }
+						end
+					end
+					result = true
+				rescue OpenURI::HTTPError => e
+					if e.message.match(/^404/)
+						puts "MISSING: #{object[:name]}/#{object[:url]} => #{e.message}"
+						indb { MissingRelease.create(:source => object[:source], :name => object[:name], :log => (object[:url] + " => " + e.message) ) }
+						result = false
+					else
+						puts "ERROR: #{object[:name]}/#{object[:url]} => #{e.message}"
+						if defer_on_error
+							indb { 
+								DeferredDownload.from_object(object, e.inspect).save! unless DeferredDownload.find(:first, :conditions => [ 'url = ?', object[:url] ])
+							}
+							result = true
+						else
+							result = false
+						end
+					end
+				rescue Exception => e
+					puts "ERROR: #{object[:name]}/#{object[:url]} => #{e.message}"
+					if defer_on_error
+						indb { 
+							DeferredDownload.from_object(object, e.inspect).save! unless DeferredDownload.find(:first, :conditions => [ 'url = ?', object[:url] ])
+						}
+						result = true
+					else
+						result = false
 					end
 				end
-				File.rename(filenamed, filename)
-				DownloadHistory.create({ :name => object[:name], :additional => 'single'})
-			rescue OpenURI::HTTPError => e
-				if e.message.match(/^404/)
-					puts "MISSING: #{object[:name]}/#{object[:url]} => #{e.message}"
-					MissingRelease.create(:source => object[:source], :name => object[:name], :log => (object[:url] + " => " + e.message) )
-					return false
-				else
-					puts "ERROR: #{object[:name]}/#{object[:url]} => #{e.message}"
-					DeferredDownload.from_object(object).save!
-					return true
-				end
-			rescue Exception => e
-				puts "ERROR: #{object[:name]}/#{object[:url]} => #{e.message}"
-				DeferredDownload.from_object(object).save!
-				return true
 			end
-			return true
-		end
+#		}
+		return result
 	end
 end
 
+
 downloader = Downloader.new(config)
+
+
 
 lw = LogWatcher.new(config, { 
 	'pt' => PTModule.new(config, [ 
@@ -499,6 +610,8 @@ lw = LogWatcher.new(config, {
 			GenericADL.new(downloader)
 		])
 	])
-})
+}, DeferredDownloader.new(downloader))
+
+
 lw.start
 lw.join
