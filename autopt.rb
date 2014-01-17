@@ -548,6 +548,7 @@ class Downloader
 				begin
 					# FIXME
 #					url = object[:url].gsub(/polishtracker\.net/,'localhost')
+					url = object[:url]					
 					filename = File.join(@config.watchdir,object[:name]) + '.torrent'
 					filenamed = filename + ".adldownload"
 					puts "DOWNLOAD: #{object[:name]}/#{object[:url]} => #{filenamed}"
