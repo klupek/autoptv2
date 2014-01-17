@@ -558,7 +558,7 @@ class Downloader
 						end
 					end
 					File.rename(filenamed, filename)
-					indb { DownloadHistory.create({ :name => object[:name], :additional => 'single'}) }
+					indb { DownloadHistory.create({ :name => object[:name], :quality => 'single'}) }
 					if object[:addhistory]
 						object[:addhistory].each do |ahe|
 							puts "DOWNLOADER: Saving additional DH: " + ahe.inspect
